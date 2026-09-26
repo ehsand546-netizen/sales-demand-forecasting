@@ -4,6 +4,7 @@ import numpy as np
 import pickle
 import matplotlib.pyplot as plt
 import os
+from scipy.stats import norm
 
 # --- Build robust absolute paths based on this script's own location ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -12,8 +13,6 @@ OUTPUTS_DIR = os.path.join(BASE_DIR, '..', 'outputs')
 
 # --- Page config ---
 st.set_page_config(page_title="Sales Demand Forecasting Dashboard", layout="wide")
-
-# --- Load data and model ---
 
 # --- Load data and model ---
 @st.cache_data
@@ -30,12 +29,35 @@ def load_model():
         model = pickle.load(f)
     return model
 
-df_full, df, inventory_plan, model_comparison = load_data()
-xgb_model = load_model()
+try:
+    df_full, df, inventory_plan, model_comparison = load_data()
+    xgb_model = load_model()
+except Exception as e:
+    st.error("⚠️ Something went wrong loading the data or model. Please check back later.")
+    st.stop()
+
+feature_cols_global = ['store', 'item', 'year', 'month', 'day', 'day_of_week',
+                        'day_of_year', 'is_weekend', 'sales_lag_1', 'sales_lag_7',
+                        'sales_lag_365', 'rolling_mean_7', 'rolling_mean_30']
 
 # --- Title ---
 st.title("📊 Sales Demand Forecasting & Inventory Optimization")
 st.markdown("End-to-end demand forecasting using XGBoost, with inventory recommendations.")
+
+with st.expander("ℹ️ How this dashboard works"):
+    st.markdown("""
+    **Model**: XGBoost trained on 5 years of daily sales data (2013–2017), 10 stores × 50 items.
+
+    **Features used**: calendar features (month, day-of-week), lag features (sales 1/7/365 days ago),
+    and rolling averages (7-day, 30-day) — all computed without data leakage using grouped, shifted operations.
+
+    **Validation**: chronological train/test split (last 90 days held out as unseen test data) —
+    never a random split, since future data must never leak into training for time-series problems.
+
+    **Inventory logic**: Safety Stock = Z-score(service level) × demand std × √(lead time).
+    Reorder Point = (avg daily demand × lead time) + safety stock. Lead time and service level
+    are assumptions (adjustable in the Inventory tab) since the dataset lacks real supplier data.
+    """)
 
 # --- Sidebar filters (global, apply across tabs) ---
 st.sidebar.header("Filters")
@@ -70,14 +92,17 @@ with tab2:
     if selected_item != "All":
         filtered_df = filtered_df[filtered_df['item'] == selected_item]
 
-    monthly_trend = filtered_df.set_index('date').resample('ME')['sales'].sum()
+    if filtered_df.empty:
+        st.warning("No data available for this selection.")
+    else:
+        monthly_trend = filtered_df.set_index('date').resample('ME')['sales'].sum()
 
-    fig, ax = plt.subplots(figsize=(14, 4))
-    ax.plot(monthly_trend.index, monthly_trend.values, color='#2E86AB', linewidth=1.5)
-    ax.set_title(f"Monthly Sales Trend (Store: {selected_store}, Item: {selected_item})")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Total Units Sold")
-    st.pyplot(fig)
+        fig, ax = plt.subplots(figsize=(14, 4))
+        ax.plot(monthly_trend.index, monthly_trend.values, color='#2E86AB', linewidth=1.5)
+        ax.set_title(f"Monthly Sales Trend (Store: {selected_store}, Item: {selected_item})")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Total Units Sold")
+        st.pyplot(fig)
 
 # ============ TAB 3: MODEL PERFORMANCE ============
 with tab3:
@@ -87,11 +112,7 @@ with tab3:
     split_date = df_sorted['date'].max() - pd.Timedelta(days=90)
     test_data = df_sorted[df_sorted['date'] > split_date].copy()
 
-    feature_cols = ['store', 'item', 'year', 'month', 'day', 'day_of_week',
-                     'day_of_year', 'is_weekend', 'sales_lag_1', 'sales_lag_7',
-                     'sales_lag_365', 'rolling_mean_7', 'rolling_mean_30']
-
-    test_data['predicted_sales'] = xgb_model.predict(test_data[feature_cols])
+    test_data['predicted_sales'] = xgb_model.predict(test_data[feature_cols_global])
     daily_actual_vs_pred = test_data.groupby('date')[['sales', 'predicted_sales']].sum()
 
     fig2, ax2 = plt.subplots(figsize=(14, 4))
@@ -106,26 +127,45 @@ with tab3:
     st.subheader("Model Comparison")
     st.dataframe(model_comparison, use_container_width=True)
 
-# ============ TAB 4: INVENTORY ============
-with tab4:
-    st.subheader("Inventory & Reorder Recommendations")
+    st.markdown("---")
+    st.subheader("🔮 Forecast Next 30 Days")
 
-    inv_filtered = inventory_plan.copy()
-    if selected_store != "All":
-        inv_filtered = inv_filtered[inv_filtered['store'] == selected_store]
-    if selected_item != "All":
-        inv_filtered = inv_filtered[inv_filtered['item'] == selected_item]
+    forecast_store = st.selectbox("Store for forecast", options=sorted(df['store'].unique()), key="fc_store")
+    forecast_item = st.selectbox("Item for forecast", options=sorted(df['item'].unique()), key="fc_item")
 
-    st.dataframe(inv_filtered.sort_values(by='reorder_point', ascending=False), use_container_width=True)
+    if st.button("Generate 30-Day Forecast"):
+        history = df[(df['store'] == forecast_store) & (df['item'] == forecast_item)].sort_values('date').copy()
 
-    st.markdown("**Top 10 Products by Reorder Priority**")
-    top_reorder = inventory_plan.sort_values(by='reorder_point', ascending=False).head(10)
+        if history.empty:
+            st.warning("No historical data available for this store-item combination.")
+        else:
+            last_date = history['date'].max()
+            recent_sales = history.set_index('date')['sales'].to_dict()
 
-    fig3, ax3 = plt.subplots(figsize=(10, 5))
-    labels = top_reorder['store'].astype(str) + "-" + top_reorder['item'].astype(str)
-    ax3.barh(labels, top_reorder['reorder_point'], color='#A23B72')
-    ax3.set_xlabel("Reorder Point (units)")
-    ax3.set_ylabel("Store-Item")
-    ax3.set_title("Top 10 Products Needing Highest Reorder Points")
-    ax3.invert_yaxis()
-    st.pyplot(fig3)
+            future_preds = []
+            for i in range(1, 31):
+                future_date = last_date + pd.Timedelta(days=i)
+
+                lag_1 = recent_sales.get(future_date - pd.Timedelta(days=1), history['sales'].iloc[-1])
+                lag_7 = recent_sales.get(future_date - pd.Timedelta(days=7), history['sales'].mean())
+                lag_365 = recent_sales.get(future_date - pd.Timedelta(days=365), history['sales'].mean())
+                last_7_vals = [recent_sales.get(future_date - pd.Timedelta(days=d), history['sales'].mean()) for d in range(1, 8)]
+                last_30_vals = [recent_sales.get(future_date - pd.Timedelta(days=d), history['sales'].mean()) for d in range(1, 31)]
+
+                row = pd.DataFrame([{
+                    'store': forecast_store, 'item': forecast_item,
+                    'year': future_date.year, 'month': future_date.month, 'day': future_date.day,
+                    'day_of_week': future_date.dayofweek, 'day_of_year': future_date.dayofyear,
+                    'is_weekend': int(future_date.dayofweek >= 5),
+                    'sales_lag_1': lag_1, 'sales_lag_7': lag_7, 'sales_lag_365': lag_365,
+                    'rolling_mean_7': np.mean(last_7_vals), 'rolling_mean_30': np.mean(last_30_vals)
+                }])
+
+                pred = xgb_model.predict(row[feature_cols_global])[0]
+                recent_sales[future_date] = pred
+                future_preds.append({'date': future_date, 'forecasted_sales': pred})
+
+            future_df = pd.DataFrame(future_preds)
+
+            fig4, ax4 = plt.subplots(figsize=(14, 4))
+            ax4.plot(history['date'].tail(60), history['sales'].tail(60), label='Recent Actual',
