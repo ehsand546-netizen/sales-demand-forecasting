@@ -3,22 +3,24 @@ import pandas as pd
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
+import os
 
 # --- Page config ---
 st.set_page_config(page_title="Sales Demand Forecasting Dashboard", layout="wide")
 
 # --- Load data and model ---
+# --- Load data and model ---
 @st.cache_data
 def load_data():
-    df_full = pd.read_csv('../data/train_cleaned.csv', parse_dates=['date'])
-    df_features = pd.read_csv('../data/train_features.csv', parse_dates=['date'])
-    inventory_plan = pd.read_csv('../outputs/inventory_plan.csv')
-    model_comparison = pd.read_csv('../outputs/model_comparison.csv')
+    df_full = pd.read_csv(os.path.join(DATA_DIR, 'train_cleaned.csv'), parse_dates=['date'])
+    df_features = pd.read_csv(os.path.join(DATA_DIR, 'train_features.csv'), parse_dates=['date'])
+    inventory_plan = pd.read_csv(os.path.join(OUTPUTS_DIR, 'inventory_plan.csv'))
+    model_comparison = pd.read_csv(os.path.join(OUTPUTS_DIR, 'model_comparison.csv'))
     return df_full, df_features, inventory_plan, model_comparison
 
 @st.cache_resource
 def load_model():
-    with open('../outputs/xgb_model.pkl', 'rb') as f:
+    with open(os.path.join(OUTPUTS_DIR, 'xgb_model.pkl'), 'rb') as f:
         model = pickle.load(f)
     return model
 
