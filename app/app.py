@@ -5,10 +5,16 @@ import pickle
 import matplotlib.pyplot as plt
 import os
 
+# --- Build robust absolute paths based on this script's own location ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, '..', 'data')
+OUTPUTS_DIR = os.path.join(BASE_DIR, '..', 'outputs')
+
 # --- Page config ---
 st.set_page_config(page_title="Sales Demand Forecasting Dashboard", layout="wide")
 
 # --- Load data and model ---
+
 # --- Load data and model ---
 @st.cache_data
 def load_data():
