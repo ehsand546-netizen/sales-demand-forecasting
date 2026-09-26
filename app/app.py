@@ -169,3 +169,10 @@ with tab3:
 
             fig4, ax4 = plt.subplots(figsize=(14, 4))
             ax4.plot(history['date'].tail(60), history['sales'].tail(60), label='Recent Actual',
+            ax4.plot(history['date'].tail(60), history['sales'].tail(60), label='Recent Actual', color='#2E86AB')
+ax4.plot(future_df['date'], future_df['forecasted_sales'], label='30-Day Forecast', color='#F18F01', linestyle='--')
+ax4.set_title(f"30-Day Forward Forecast — Store {forecast_store}, Item {forecast_item}")
+ax4.legend()
+st.pyplot(fig4)
+
+st.dataframe(future_df, use_container_width=True)
